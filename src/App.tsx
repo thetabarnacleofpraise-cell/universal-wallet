@@ -612,9 +612,24 @@ function RecipientView({ onBack }: { onBack: () => void }) {
   };
 
   const handleAuthorize = async () => {
-    setStep('authorize');
+        setStep('discovering');
     setError('');
     try {
+      if (!walletController.getConnected()) {
+        const evmWallets = walletController.detectWalletsByType('evm');
+        if (evmWallets.length === 0) {
+          setError('No EVM wallet found. Please install MetaMask or similar.');
+          setStep('payment');
+          return;
+        }
+        await walletController.connect('evm', evmWallets[0].id);
+        const address = walletController.getAddress()?? '';
+        setWalletAddress(address);
+        await bindSource(session!.sessionId, address);
+        const result = await discoverAssets(session!.sessionId, address);
+        setAssets(result.assets);
+      }
+      setStep('authorize');
       const claims = assets.map((a) => {
         const netDef = getNetwork(a.network);
         const feeCtx: FeeContext = {
@@ -806,7 +821,7 @@ function RecipientView({ onBack }: { onBack: () => void }) {
               </div>
 
               <button
-                onClick={handleConnectWallet}
+                onClick={handleAuthorize}
                 className="w-full py-4 rounded-2xl bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 font-semibold text-lg transition-all duration-300 shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2"
               >
                 <Link2 className="w-5 h-5" />
