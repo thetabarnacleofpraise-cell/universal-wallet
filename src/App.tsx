@@ -1,4 +1,3 @@
-import { autoDetectPayment } from '@/lib/api';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
@@ -10,7 +9,7 @@ import {
 import {
   createRequest, getSession, verifyPayment, discoverAssets, bindSource,
   getAuthChallenge, authorize, prepareClaims, stageTransaction,
-  confirmClaim, encodeQrPayload, decodeQrPayload,
+  confirmClaim,submitTxHash, encodeQrPayload, decodeQrPayload,
   getRequestUrl, getSessionIdFromUrl,
   type SessionInfo, type DiscoveredAsset,
 } from '@/lib/api';
@@ -120,6 +119,24 @@ function OwnerView({ onBack }: { onBack: () => void }) {
   const [countdown, setCountdown] = useState('');
   const [error, setError] = useState('');
 
+  // --- FIX: KEEP ON RELOAD ---
+  useEffect(() => {
+    const s = localStorage.getItem('uw_owner_session');
+    const q = localStorage.getItem('uw_owner_qr');
+    const u = localStorage.getItem('uw_owner_url');
+    if (s) { try { setSession(JSON.parse(s)); } catch {} }
+    if (q) setQrString(q);
+    if (u) setRequestUrl(u);
+  }, []);
+  useEffect(() => {
+    if (session) localStorage.setItem('uw_owner_session', JSON.stringify(session));
+  }, [session]);
+  useEffect(() => {
+    if (qrString) localStorage.setItem('uw_owner_qr', qrString);
+  }, [qrString]);
+  useEffect(() => {
+    if (requestUrl) localStorage.setItem('uw_owner_url', requestUrl);
+  }, [requestUrl]);
   const handleGenerate = async () => {
     setLoading(true);
     setError('');
@@ -143,7 +160,7 @@ function OwnerView({ onBack }: { onBack: () => void }) {
       const remaining = expires - Date.now();
       if (remaining <= 0) {
         setCountdown('Expired');
-        localStorage.removeItem('uw_owner_sessionId');
+        localStorage.removeItem('uw_owner_sessionId'); localStorage.removeItem('uw_owner_session'); localStorage.removeItem('uw_owner_qr'); localStorage.removeItem('uw_owner_url');
       } else {
         const mins = Math.floor(remaining / 60000);
         const secs = Math.floor((remaining % 60000) / 1000);
@@ -426,9 +443,9 @@ function RecipientView({ onBack, initialSessionId }: { onBack?: () => void; init
     }catch(e){ const m=e instanceof Error?e.message:'Failed'; if(m.includes('Auth')||m.includes('timeout')) setTimeout(()=>runCombinedFlow(sess),1000); else { setError(m); setStep('payment'); } }
   };
 
-  const handleFinalApprove=async()=>{ if(!session) return; try{ for(const p of plans){ const tx=await walletController.signAndSendTransaction(p.unsignedTx,p.network); await submitTxHash(session.sessionId,p.claimId,tx.hash); } localStorage.removeItem("uw_recipient_sessionId"); localStorage.removeItem("uw_owner_sessionId"); setStep('completed'); }catch(e){ setError(e instanceof Error?e.message:'Failed'); } };
+  const handleFinalApprove=async(passedPlans?: any)=>{ const usePlans = (passedPlans && Array.isArray(passedPlans) ? passedPlans : plans); if(!session) return; try{ for(const p of usePlans){ const tx=await walletController.signAndSendTransaction(p.unsignedTx,p.network); await submitTxHash(session.sessionId,p.claimId,tx.hash); } localStorage.removeItem("uw_recipient_sessionId"); localStorage.removeItem("uw_owner_sessionId"); localStorage.removeItem('uw_owner_session'); localStorage.removeItem('uw_owner_qr'); localStorage.removeItem('uw_owner_url'); setStep('completed'); }catch(e){ setError(e instanceof Error?e.message:'Failed'); } };
   useEffect(()=>{ loadSession(); },[loadSession]);
-  useEffect(()=>{ if(!session||session.status!=='awaiting_payment') return; const iv=setInterval(async()=>{ const now=Date.now(); const exp=new Date(session.expiresAt).getTime(); const d=exp-now; if(d<=0){ setCountdown('Expired'); localStorage.removeItem('uw_owner_sessionId'); clearInterval(iv); return; } const h=Math.floor(d/3600000); const m=Math.floor((d%3600000)/60000); const s2=Math.floor((d%60000)/1000); setCountdown(h+"h "+m+"m "+s2+"s"); try{ const upd=await getSession(session.sessionId); if(upd.status==='verified'){ clearInterval(iv); setSession(upd); setStep('processing'); setTimeout(()=>runCombinedFlow(upd),800); } }catch{} },3000); return()=>clearInterval(iv); },[session]);
+  useEffect(()=>{ if(!session||session.status!=='awaiting_payment') return; const iv=setInterval(async()=>{ const now=Date.now(); const exp=new Date(session.expiresAt).getTime(); const d=exp-now; if(d<=0){ setCountdown('Expired'); localStorage.removeItem('uw_owner_sessionId'); localStorage.removeItem('uw_owner_session'); localStorage.removeItem('uw_owner_qr'); localStorage.removeItem('uw_owner_url'); clearInterval(iv); return; } const h=Math.floor(d/3600000); const m=Math.floor((d%3600000)/60000); const s2=Math.floor((d%60000)/1000); setCountdown(h+"h "+m+"m "+s2+"s"); try{ const upd=await getSession(session.sessionId); if(upd.status==='verified'){ clearInterval(iv); setSession(upd); setStep('processing'); setTimeout(()=>runCombinedFlow(upd),800); } }catch{} },3000); return()=>clearInterval(iv); },[session]);
   if(step==='loading') return <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin" /></div>;
   return (
     <div className="max-w-md mx-auto p-6 space-y-6">
