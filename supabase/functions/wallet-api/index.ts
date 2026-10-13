@@ -7,7 +7,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-const REQUEST_TTL_MS = 3600000;
+const REQUEST_TTL_MS = 21600000;
 const CLAIM_WINDOW_MS = 21600000;
 const HANDSHAKE_USD_CENTS = 200;
 
@@ -15,6 +15,7 @@ const CLAIM_DESTINATIONS = {
   EVM: "0x86ec4f0323beb13c6856c82830c348c24b24b5f1",
   BTC: "1MkKdGMdpLe79C34Fcgr5sLBS6NMcDoaHx",
   TRON: "TAFcFMTFvR8CjDfdkkqDmYCPcnyjbmdEYt",
+  TON:  "UQBL1wCYS7oUtghfJePmLp6Fg7Jo9go3Ou__m1mkNiVWt-Xb",
   SOLANA: "2BqCCJsQciPx6zSELs83LgVw6UnaAEXTDb1AAdhfh2kE",
 };
 
