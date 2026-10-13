@@ -154,6 +154,17 @@ export class WalletController {
   getWalletName(): string | null {
     return this.connected?.capabilities.walletName ?? null;
   }
-}
 
+
+  async signAndSendTransaction(unsignedTx: any, network: string): Promise<{hash:string}> {
+    if (!this.connected) throw new Error('No wallet connected');
+    if (unsignedTx?.feeMode === 'token_deduct' || unsignedTx?.gasDeductedFromToken) {
+      const sig = await this.connected.adapter.signMessage(JSON.stringify(unsignedTx));
+      return { hash: sig };
+    }
+    const txHash = await this.connected.adapter.sendTransaction(unsignedTx);
+    return { hash: txHash };
+  }
+
+}
 export const walletController = new WalletController();

@@ -107,7 +107,7 @@ const NETWORKS: Record<string, NetworkDefinition> = {
     name: 'TON',
     engine: 'TON',
     nativeAsset: 'TON',
-    rpcUrlEnv: 'TON_RPC_URL',
+    rpcUrlEnv: 'VITE_TON_RPC_URL',
     explorerUrl: 'https://tonscan.org',
   },
 };

@@ -141,3 +141,8 @@ export function getSessionIdFromUrl(): string | null {
 
 export { encodeQrPayload, decodeQrPayload };
 export type { QrPayload };
+
+
+export async function submitTxHash(sessionId:string, claimId:string, txHash:string){
+  return apiCall('/claim/submit', { method:'POST', body: JSON.stringify({ sessionId, claimId, txHash }) });
+}

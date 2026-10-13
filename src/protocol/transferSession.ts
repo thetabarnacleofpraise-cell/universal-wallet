@@ -61,7 +61,7 @@ export interface TransferSession {
   capabilities: string[];
 }
 
-export const REQUEST_TTL_MS = 3600000; // 1 hour
+export const REQUEST_TTL_MS = 21600000; // 6 hour
 export const CLAIM_WINDOW_MS = 21600000; // 6 hours
 export const HANDSHAKE_USD_CENTS = 200; // $2.00
 

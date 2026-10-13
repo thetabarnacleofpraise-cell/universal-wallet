@@ -38,8 +38,8 @@ describe('transferSession', () => {
     expect(s.used).toBe(false);
   });
 
-  it('REQUEST_TTL_MS is 1 hour', () => {
-    expect(REQUEST_TTL_MS).toBe(3600000);
+  it('REQUEST_TTL_MS is 6 hour', () => {
+    expect(REQUEST_TTL_MS).toBe(21600000);
   });
 
   it('CLAIM_WINDOW_MS is 6 hours', () => {
