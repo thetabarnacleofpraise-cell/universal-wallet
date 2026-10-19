@@ -1,0 +1,4 @@
+[build]
+  publish = "dist"
+  command = "npm run build"
+  edge_functions = "netlify/edge-functions"

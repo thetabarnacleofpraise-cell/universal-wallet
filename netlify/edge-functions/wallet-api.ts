@@ -1,5 +1,5 @@
-import { createClient } from "npm:@supabase/supabase-js@2.57.4";
-import { ethers } from "npm:ethers@6.13.4";
+import { createClient } from "@supabase/supabase-js";
+import { ethers } from "ethers";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
