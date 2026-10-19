@@ -963,7 +963,7 @@ async function handleHealth() {
   return jsonBody({ status: "ok", timestamp: new Date().toISOString() });
 }
 
-Deno.serve(async (req: Request) => {
+export default async (req: Request, context: any) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
@@ -1049,4 +1049,5 @@ Deno.serve(async (req: Request) => {
   } catch (err) {
     return errorBody(err.message, 500);
   }
-});
+
+}
