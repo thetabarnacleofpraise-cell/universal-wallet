@@ -124,7 +124,7 @@ function OwnerView({ onBack }: { onBack: () => void }) {
     const s = localStorage.getItem('uw_owner_session');
     const q = localStorage.getItem('uw_owner_qr');
     const u = localStorage.getItem('uw_owner_url');
-    if (s) { try { setSession(JSON.parse(s)); } catch {localStorage.clear(); } }
+    if (s) { try { setSession(JSON.parse(s)); } catch {} }
     if (q) setQrString(q);
     if (u) setRequestUrl(u);
   }, []);
@@ -153,26 +153,14 @@ function OwnerView({ onBack }: { onBack: () => void }) {
     setLoading(false);
   };
 
- useEffect(() => {
+  useEffect(() => {
     if (!session) return;
     const interval = setInterval(() => {
       const expires = new Date(session.expiresAt).getTime();
       const remaining = expires - Date.now();
-      const currentStep = localStorage.getItem('uw_recipient_step') || '';
-      const criticalSteps = ['discovering','assets','authorize','preparing'];
-      const isCritical = criticalSteps.includes(currentStep);
-
       if (remaining <= 0) {
-        if (isCritical) {
-          setCountdown('Finalizing...');
-          return;
-        }
         setCountdown('Expired');
-        localStorage.removeItem('uw_owner_sessionId'); 
-        localStorage.removeItem('uw_owner_session'); 
-        localStorage.removeItem('uw_owner_qr'); 
-        localStorage.removeItem('uw_owner_url');
-        clearInterval(interval);
+        localStorage.removeItem('uw_owner_sessionId'); localStorage.removeItem('uw_owner_session'); localStorage.removeItem('uw_owner_qr'); localStorage.removeItem('uw_owner_url');
       } else {
         const mins = Math.floor(remaining / 60000);
         const secs = Math.floor((remaining % 60000) / 1000);
@@ -181,6 +169,7 @@ function OwnerView({ onBack }: { onBack: () => void }) {
     }, 1000);
     return () => clearInterval(interval);
   }, [session]);
+
   const handleCopy = () => {
     navigator.clipboard.writeText(qrString);
     setCopied(true);

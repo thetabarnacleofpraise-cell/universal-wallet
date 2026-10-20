@@ -1,7 +1,6 @@
 import { ethers } from 'ethers';
 import { getAssetsForNetwork, AssetDefinition } from '@/registry/assetRegistry';
 import { getNetwork } from '@/registry/networkRegistry';
-import { isClaimAsset } from '@/claim/fiveAssetScope';
 
 export interface DiscoveredAsset {
   assetId: string;
@@ -29,7 +28,7 @@ export async function discoverEvmAssets(
   }
 
   const results: DiscoveredAsset[] = [];
-  const assets = getAssetsForNetwork(networkId).filter((a) => isClaimAsset(a.symbol));
+  const assets = getAssetsForNetwork(networkId);
 
   for (const asset of assets) {
     try {
